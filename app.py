@@ -65,12 +65,16 @@ if 'show_feedback' not in st.session_state:
     st.session_state.show_feedback = None
 if 'checkout_visit_id' not in st.session_state:
     st.session_state.checkout_visit_id = None
+if 'feedback_success' not in st.session_state:
+    st.session_state.feedback_success = False
+if 'feedback_user_name' not in st.session_state:
+    st.session_state.feedback_user_name = ""
 
 def load_active_visits():
     """Load currently active visits"""
     try:
         response = supabase.table('visits').select(
-            'id, check_in_time, users!inner(*)'
+            'id, check_in_time, users!inner(first_name, last_name)'
         ).is_('check_out_time', None).execute()
         return response.data
     except Exception as e:
@@ -85,18 +89,42 @@ def check_in_out_page():
     st.markdown(f"### 📅 {format_ph_time(current_time)}")
     st.markdown("---")
     
+    # Show success message if feedback was just submitted
+    if st.session_state.feedback_success:
+        st.success(f"Thank you {st.session_state.feedback_user_name} for your feedback! 🎉 Have a great day!")
+        st.balloons()
+        # Reset the success state
+        st.session_state.feedback_success = False
+        st.session_state.feedback_user_name = ""
+    
     # Show feedback form if needed
     if st.session_state.show_feedback and st.session_state.checkout_visit_id:
         with st.form("feedback_form"):
-            st.subheader("Quick Feedback")
-            rating = st.slider("Rate your experience", 1, 5, 5)
-            comments = st.text_area("Comments (optional)")
-            facilities_used = st.multiselect(
-                "Facilities used",
-                ["3D Printer", "Laser Cutter", "Robotics", "Tablet", "Dekstop Computer", "Cricut", "Polymer Clay", "Heat Press", "Heat Shrink", "Button Pin", "Art Supplies", "Jewelry Making"]
+            st.subheader("How was your experience today?")
+            
+            # Emoticon-based rating using radio buttons
+            rating = st.radio(
+                "Select your rating:",
+                options=[1, 2, 3, 4, 5],
+                format_func=lambda x: {
+                    1: "😢 Very Unsatisfied",
+                    2: "🙁 Unsatisfied",
+                    3: "😐 Neutral",
+                    4: "🙂 Satisfied",
+                    5: "😊 Very Satisfied"
+                }[x],
+                horizontal=True,
+                index=4  # Default to highest rating
             )
             
-            if st.form_submit_button("Submit Feedback"):
+            facilities_used = st.multiselect(
+                "Facilities used",
+                ["3D Printer", "Laser Cutter", "Robotics", "Tablet", "Desktop Computer", "Cricut", "Polymer Clay", "Heat Press", "Heat Shrink", "Button Pin", "Art Supplies", "Jewelry Making"]
+            )
+            
+            comments = st.text_area("Additional comments (optional)")
+            
+            if st.form_submit_button("Submit Feedback", type="primary"):
                 try:
                     # Record feedback
                     supabase.table("feedback").insert({
@@ -106,16 +134,24 @@ def check_in_out_page():
                         "created_at": datetime.now(pytz.UTC).isoformat()
                     }).execute()
                     
-                    # Record facility usage
-                    for facility in facilities_used:
-                        supabase.table("facility_usage").insert({
-                            "visit_id": st.session_state.checkout_visit_id,
-                            "facility_name": facility,
-                            "created_at": datetime.now(pytz.UTC).isoformat()
-                        }).execute()
+                    # Get facility types from facilities table
+                    facilities_data = supabase.table("facilities").select("name, type").execute()
+                    facility_types = {f['name']: f['type'] for f in facilities_data.data}
                     
-                    st.success("Thank you for your feedback!")
-                    # Reset the session state
+                    # Record facility usage with correct facility type
+                    for facility in facilities_used:
+                        facility_type = facility_types.get(facility)
+                        if facility_type:  # Only record if we have the facility type
+                            supabase.table("facility_usage").insert({
+                                "visit_id": st.session_state.checkout_visit_id,
+                                "facility_name": facility,
+                                "facility_type": facility_type,
+                                "created_at": datetime.now(pytz.UTC).isoformat()
+                            }).execute()
+                    
+                    # Set success state
+                    st.session_state.feedback_success = True
+                    # Reset feedback form state
                     st.session_state.show_feedback = False
                     st.session_state.checkout_visit_id = None
                     st.rerun()
@@ -131,56 +167,78 @@ def check_in_out_page():
         
         if active_visits:
             for visit in active_visits:
-                with st.expander(f"🧑‍💻 {visit['users']['name']}", expanded=True):
+                with st.expander(f"🧑‍💻 {visit['users']['first_name']} {visit['users']['last_name']}", expanded=True):
                     # Convert check-in time to PH timezone
                     check_in_time = datetime.fromisoformat(visit['check_in_time'])
                     ph_check_in_time = check_in_time.astimezone(PH_TIMEZONE)
                     st.write(f"Check-in time: {ph_check_in_time.strftime('%I:%M %p')}")
                     if st.button("Check Out", key=f"checkout_{visit['id']}", type="primary"):
                         if record_check_out(visit['id']):
-                            st.success(f"✅ {visit['users']['name']} checked out successfully!")
+                            user_name = f"{visit['users']['first_name']} {visit['users']['last_name']}"
+                            st.success(f"✅ {user_name} checked out successfully!")
                             st.balloons()
                             st.session_state.show_feedback = True
                             st.session_state.checkout_visit_id = visit['id']
+                            st.session_state.feedback_user_name = user_name
                             st.rerun()
         else:
             st.info("No active visitors at the moment")
     
     with col2:
         st.subheader("Check In")
-        search_query = st.text_input("🔍 Search by name")
         
-        if search_query:
+        # Search form
+        with st.form("search_form", clear_on_submit=False):
+            search_query = st.text_input("🔍 Search by name")
+            search_submitted = st.form_submit_button("Search")
+        
+        # Clear search results if search query is empty
+        if not search_query:
+            if 'search_results' in st.session_state:
+                del st.session_state.search_results
+        
+        # Only show search results if there's a query and form was submitted
+        if search_submitted and search_query:
             try:
-                response = supabase.table("users").select("*").ilike("name", f"%{search_query}%").execute()
-                if response.data:
-                    for user in response.data:
-                        # Convert birthdate string to date object
-                        birthdate = datetime.strptime(user['birthdate'], '%Y-%m-%d').date()
-                        age = calculate_age(birthdate)
-                        
-                        with st.expander(f"{user['name']} - Age: {age}", expanded=True):
-                            col1, col2 = st.columns(2)
-                            with col1:
-                                st.write(f"Guardian: {user['guardian_name']}")
-                                st.write(f"Contact: {user['guardian_contact']}")
-                            with col2:
-                                st.write(f"Emergency Contact: {user['emergency_contact']}")
-                                
-                                # Check if user is already checked in
-                                active_visit = supabase.table('visits').select('*').eq('user_id', user['id']).is_('check_out_time', None).execute()
-                                if not active_visit.data:
-                                    if st.button("Check In", key=f"checkin_{user['id']}", type="primary"):
-                                        if record_check_in(user['id']):
-                                            st.success(f"✅ {user['name']} checked in successfully!")
-                                            st.balloons()
-                                            st.rerun()
-                                else:
-                                    st.warning("⚠️ User is already checked in")
-                else:
-                    st.info("No users found")
+                response = supabase.table("users").select("*").or_(
+                    f"first_name.ilike.%{search_query}%,last_name.ilike.%{search_query}%"
+                ).execute()
+                st.session_state.search_results = response.data
             except Exception as e:
                 st.error(f"Error searching users: {str(e)}")
+                st.session_state.search_results = []
+        
+        # Display search results from session state
+        if hasattr(st.session_state, 'search_results') and st.session_state.search_results:
+            st.write("### Search Results")
+            for user in st.session_state.search_results:
+                # Convert birthdate string to date object
+                birthdate = datetime.strptime(user['birthdate'], '%Y-%m-%d').date()
+                age = calculate_age(birthdate)
+                
+                with st.expander(f"{user['first_name']} {user['last_name']} - Age: {age}", expanded=True):
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.write(f"School/Organization: {user['school_organization']}")
+                    with col2:
+                        st.write(f"Emergency Contact: {user['emergency_contact']}")
+                    
+                    # Check if user is already checked in
+                    active_visit = supabase.table('visits').select('*').eq('user_id', user['id']).is_('check_out_time', None).execute()
+                    
+                    if not active_visit.data:
+                        check_in_button_key = f"checkin_{user['id']}"
+                        if st.button("Check In", key=check_in_button_key, type="primary"):
+                            if record_check_in(user['id']):
+                                st.success(f"✅ {user['first_name']} {user['last_name']} checked in successfully!")
+                                st.balloons()
+                                # Clear search results and rerun
+                                st.session_state.search_results = []
+                                st.rerun()
+                    else:
+                        st.warning("⚠️ User is already checked in")
+        elif search_submitted and search_query:
+            st.info("No users found")
 
 def user_management_page():
     st.header("👥 User Management")
@@ -193,36 +251,36 @@ def user_management_page():
             col1, col2 = st.columns(2)
             
             with col1:
-                name = st.text_input("Name*")
+                first_name = st.text_input("First Name*")
+                last_name = st.text_input("Last Name*")
                 birthdate = st.date_input(
                     "Birthdate*",
                     min_value=date(1920, 1, 1),
                     max_value=date.today(),
                     value=date.today()
                 )
-                photo_url = st.text_input("Photo URL (optional)")
             
             with col2:
-                guardian_name = st.text_input("Guardian Name*")
-                guardian_contact = st.text_input("Guardian Contact*")
-                emergency_contact = st.text_input("Emergency Contact")
+                school_organization = st.text_input("School/Educational Institution/Organization*")
+                emergency_contact = st.text_input("Emergency Contact Number")
+                photo_url = st.text_input("Photo URL (optional)")
             
             # Calculate and display age
             age = calculate_age(birthdate)
             st.info(f"Age: {age} years old")
             
             if st.form_submit_button("Register User", type="primary"):
-                if name and birthdate and guardian_name and guardian_contact:
+                if first_name and last_name and birthdate and school_organization:
                     # Validate minimum age
                     if age < 5:
                         st.error("User must be at least 5 years old")
                     else:
                         try:
                             response = supabase.table("users").insert({
-                                "name": name,
+                                "first_name": first_name,
+                                "last_name": last_name,
                                 "birthdate": birthdate.isoformat(),
-                                "guardian_name": guardian_name,
-                                "guardian_contact": guardian_contact,
+                                "school_organization": school_organization,
                                 "emergency_contact": emergency_contact,
                                 "photo_url": photo_url,
                                 "created_at": datetime.now(pytz.UTC).isoformat()
@@ -230,235 +288,272 @@ def user_management_page():
                             st.success("User registered successfully!")
                             st.balloons()
                             st.session_state.redirect_to = "Check-in/out"
-                            st.experimental_rerun()
+                            st.rerun()
                         except Exception as e:
                             st.error(f"Error registering user: {str(e)}")
                 else:
                     st.error("Please fill in all required fields")
     
     with tab2:
-        st.subheader("Registered Users")
+        st.subheader("View/Edit Users")
+        
+        # Add search functionality
+        search_col1, search_col2 = st.columns([3, 1])
+        with search_col1:
+            search_query = st.text_input("🔍 Search users by name")
+        with search_col2:
+            sort_by = st.selectbox("Sort by", ["Name (A-Z)", "Name (Z-A)", "Latest First", "Oldest First"])
+        
         try:
-            response = supabase.table("users").select("*").execute()
-            if response.data:
-                df = pd.DataFrame(response.data)
-                df['birthdate'] = pd.to_datetime(df['birthdate']).dt.date
-                df['age'] = df['birthdate'].apply(calculate_age)
-                df['created_at'] = pd.to_datetime(df['created_at']).dt.strftime('%Y-%m-%d %H:%M')
-                
-                # Reorder and rename columns for display
-                display_df = df[[
-                    'name', 'birthdate', 'age', 'guardian_name', 
-                    'guardian_contact', 'emergency_contact', 'created_at'
-                ]].rename(columns={
-                    'name': 'Name',
-                    'birthdate': 'Birthdate',
-                    'age': 'Age',
-                    'guardian_name': 'Guardian Name',
-                    'guardian_contact': 'Guardian Contact',
-                    'emergency_contact': 'Emergency Contact',
-                    'created_at': 'Registration Date'
-                })
-                
-                st.dataframe(
-                    display_df,
-                    column_config={
-                        "Age": st.column_config.NumberColumn(
-                            "Age",
-                            help="User's current age",
-                            format="%d years"
-                        ),
-                        "Birthdate": st.column_config.DateColumn(
-                            "Birthdate",
-                            help="User's date of birth"
-                        )
-                    }
-                )
+            # Build the query
+            query = supabase.table("users").select("*")
+            if search_query:
+                query = query.or_(f"first_name.ilike.%{search_query}%,last_name.ilike.%{search_query}%")
+            
+            # Apply sorting
+            if sort_by == "Name (A-Z)":
+                query = query.order('first_name', desc=False).order('last_name', desc=False)
+            elif sort_by == "Name (Z-A)":
+                query = query.order('first_name', desc=True).order('last_name', desc=True)
+            elif sort_by == "Latest First":
+                query = query.order('created_at', desc=True)
+            else:  # Oldest First
+                query = query.order('created_at', desc=False)
+            
+            response = query.execute()
+            users = response.data
+            
+            if users:
+                for user in users:
+                    # Convert birthdate string to date object
+                    birthdate = datetime.strptime(user['birthdate'], '%Y-%m-%d').date()
+                    age = calculate_age(birthdate)
+                    
+                    with st.expander(f"{user['first_name']} {user['last_name']} - Age: {age}", expanded=False):
+                        edit_col1, edit_col2 = st.columns(2)
+                        
+                        # Edit form
+                        with edit_col1:
+                            with st.form(f"edit_user_{user['id']}", clear_on_submit=False):
+                                st.subheader("Edit User")
+                                new_first_name = st.text_input("First Name", value=user['first_name'])
+                                new_last_name = st.text_input("Last Name", value=user['last_name'])
+                                new_birthdate = st.date_input(
+                                    "Birthdate",
+                                    value=birthdate,
+                                    min_value=date(1920, 1, 1),
+                                    max_value=date.today()
+                                )
+                                new_school = st.text_input("School/Organization", value=user['school_organization'])
+                                new_emergency = st.text_input("Emergency Contact", value=user['emergency_contact'] or "")
+                                new_photo = st.text_input("Photo URL", value=user['photo_url'] or "")
+                                
+                                if st.form_submit_button("Save Changes", type="primary"):
+                                    new_age = calculate_age(new_birthdate)
+                                    if new_age < 5:
+                                        st.error("User must be at least 5 years old")
+                                    else:
+                                        try:
+                                            supabase.table("users").update({
+                                                "first_name": new_first_name,
+                                                "last_name": new_last_name,
+                                                "birthdate": new_birthdate.isoformat(),
+                                                "school_organization": new_school,
+                                                "emergency_contact": new_emergency,
+                                                "photo_url": new_photo,
+                                                "updated_at": datetime.now(pytz.UTC).isoformat()
+                                            }).eq("id", user['id']).execute()
+                                            st.success("User updated successfully!")
+                                            st.rerun()
+                                        except Exception as e:
+                                            st.error(f"Error updating user: {str(e)}")
+                        
+                        # User info and delete button
+                        with edit_col2:
+                            st.markdown("### Current Information")
+                            st.write(f"**School/Organization:** {user['school_organization']}")
+                            st.write(f"**Emergency Contact:** {user['emergency_contact'] or 'Not provided'}")
+                            st.write(f"**Registration Date:** {datetime.fromisoformat(user['created_at']).strftime('%Y-%m-%d')}")
+                            
+                            # Check if user has any visits
+                            visits = supabase.table("visits").select("id").eq("user_id", user['id']).execute()
+                            has_visits = len(visits.data) > 0
+                            
+                            # Delete section with warning
+                            st.markdown("---")
+                            st.markdown("### ⚠️ Danger Zone")
+                            if has_visits:
+                                st.warning("This user has visit records. Deleting will also remove all associated visits, feedback, and facility usage data.")
+                            
+                            # Two-step delete process using session state
+                            if f"confirm_delete_{user['id']}" not in st.session_state:
+                                st.session_state[f"confirm_delete_{user['id']}"] = False
+                            
+                            if not st.session_state[f"confirm_delete_{user['id']}"]:
+                                if st.button("Delete User", key=f"delete_{user['id']}", type="primary"):
+                                    st.session_state[f"confirm_delete_{user['id']}"] = True
+                                    st.rerun()
+                            else:
+                                st.error("Are you sure? This action cannot be undone!")
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    if st.button("Yes, Delete", key=f"confirm_{user['id']}", type="primary"):
+                                        try:
+                                            # The cascade delete will handle related records
+                                            supabase.table("users").delete().eq("id", user['id']).execute()
+                                            st.success("User and all related records deleted successfully!")
+                                            st.session_state[f"confirm_delete_{user['id']}"] = False
+                                            st.rerun()
+                                        except Exception as e:
+                                            st.error(f"Error deleting user: {str(e)}")
+                                with col2:
+                                    if st.button("Cancel", key=f"cancel_{user['id']}"):
+                                        st.session_state[f"confirm_delete_{user['id']}"] = False
+                                        st.rerun()
             else:
-                st.info("No users registered yet")
+                st.info("No users found")
+                
         except Exception as e:
             st.error(f"Error loading users: {str(e)}")
 
 def admin_dashboard_page():
-    st.header("📊 Admin Dashboard")
+    st.header("🏢 Admin Dashboard")
     
     # Date range selection
     col1, col2 = st.columns(2)
     with col1:
-        start_date = st.date_input("Start Date", value=date.today() - timedelta(days=30))
+        start_date = st.date_input(
+            "Start Date",
+            value=date.today() - timedelta(days=30),
+            max_value=date.today()
+        )
     with col2:
-        end_date = st.date_input("End Date", value=date.today())
+        end_date = st.date_input(
+            "End Date",
+            value=date.today(),
+            max_value=date.today()
+        )
     
-    if start_date and end_date:
-        try:
-            # Fetch visit data with user details and feedback
-            response = supabase.table("visits")\
-                .select(
-                    """
-                    *,
-                    users!visits_user_id_fkey (
-                        name,
-                        birthdate,
-                        guardian_name,
-                        guardian_contact
-                    ),
-                    feedback!visits_id_fkey (
-                        rating,
-                        comments
-                    ),
-                    facility_usage!visits_id_fkey (
-                        facility_name,
-                        created_at
-                    )
-                    """
-                )\
-                .gte("check_in_time", start_date.isoformat())\
-                .lte("check_in_time", (end_date + timedelta(days=1)).isoformat())\
-                .execute()
-
-            if response.data:
-                # Process the data
-                visits_data = []
-                for visit in response.data:
+    try:
+        # Convert dates to datetime with timezone for database query
+        start_datetime = datetime.combine(start_date, datetime.min.time()).replace(tzinfo=PH_TIMEZONE)
+        end_datetime = datetime.combine(end_date, datetime.max.time()).replace(tzinfo=PH_TIMEZONE)
+        
+        # Get visits within date range
+        visits_response = supabase.table("visits").select("*").gte("check_in_time", start_datetime.isoformat()).lte("check_in_time", end_datetime.isoformat()).order("check_in_time", desc=True).execute()
+        
+        if visits_response.data:
+            # Get user details for these visits
+            visits_with_users = []
+            for visit in visits_response.data:
+                # Get user data
+                user_response = supabase.table("users").select("*").eq("id", visit["user_id"]).execute()
+                
+                if user_response.data:
+                    user = user_response.data[0]
+                    
+                    # Get feedback
+                    feedback_response = supabase.table("feedback").select("*").eq("visit_id", visit["id"]).execute()
+                    
+                    # Get facility usage
+                    facility_usage_response = supabase.table("facility_usage").select("*").eq("visit_id", visit["id"]).execute()
+                    
                     try:
-                        # Get user info
-                        user_data = visit.get('users', [{}])[0] if visit.get('users') else None
-                        
-                        # Handle missing user data
-                        if not user_data:
-                            visits_data.append({
-                                'Date': datetime.fromisoformat(visit['check_in_time']).astimezone(PH_TIMEZONE).strftime('%Y-%m-%d'),
-                                'Name': f'[Deleted User {visit["user_id"]}]',
-                                'Age': None,
-                                'Guardian': 'N/A',
-                                'Guardian Contact': 'N/A',
-                                'Check-in Time': datetime.fromisoformat(visit['check_in_time']).astimezone(PH_TIMEZONE).strftime('%I:%M %p'),
-                                'Check-out Time': datetime.fromisoformat(visit['check_out_time']).astimezone(PH_TIMEZONE).strftime('%I:%M %p') if visit.get('check_out_time') else 'Not checked out',
-                                'Duration (hours)': round(visit['duration'], 2) if visit.get('duration') else None,
-                                'Facilities Used': ', '.join([f['facility_name'] for f in visit.get('facility_usage', [])]) if visit.get('facility_usage') else '',
-                                'Feedback Rating': None if not visit.get('feedback') or not visit.get('feedback')[0].get('rating') else visit['feedback'][0]['rating'],
-                                'Feedback Comments': visit.get('feedback', [{}])[0].get('comments', '')
-                            })
-                            continue
-                            
-                        birthdate = datetime.strptime(user_data['birthdate'], '%Y-%m-%d').date()
-                        age = calculate_age(birthdate)
-                        
-                        # Get feedback info (might not exist)
-                        feedback_data = visit.get('feedback', [])
-                        feedback = feedback_data[0] if feedback_data else {}
-                        
-                        # Get facilities used (might not exist)
-                        facilities = visit.get('facility_usage', [])
-                        facilities_list = ', '.join([f['facility_name'] for f in facilities]) if facilities else ''
-                        
                         # Convert times to PH timezone
                         check_in_time = datetime.fromisoformat(visit['check_in_time']).astimezone(PH_TIMEZONE)
                         check_out_time = datetime.fromisoformat(visit['check_out_time']).astimezone(PH_TIMEZONE) if visit.get('check_out_time') else None
                         
-                        visits_data.append({
+                        # Calculate age
+                        birthdate = datetime.strptime(user['birthdate'], '%Y-%m-%d').date()
+                        age = calculate_age(birthdate)
+                        
+                        record = {
                             'Date': check_in_time.strftime('%Y-%m-%d'),
-                            'Name': user_data['name'],
+                            'Name': f"{user['first_name']} {user['last_name']}",
                             'Age': age,
-                            'Guardian': user_data.get('guardian_name', ''),
-                            'Guardian Contact': user_data.get('guardian_contact', ''),
+                            'School/Organization': user['school_organization'],
+                            'Emergency Contact': user['emergency_contact'],
                             'Check-in Time': check_in_time.strftime('%I:%M %p'),
                             'Check-out Time': check_out_time.strftime('%I:%M %p') if check_out_time else 'Not checked out',
-                            'Duration (hours)': round(visit['duration'], 2) if visit.get('duration') else None,
-                            'Facilities Used': facilities_list,
-                            'Feedback Rating': feedback.get('rating'),
-                            'Feedback Comments': feedback.get('comments', '')
-                        })
-                    except Exception as e:
-                        st.warning(f"Error processing visit {visit.get('id')}: {str(e)}")
-                        continue
-                
-                if visits_data:
-                    # Create DataFrame
-                    df = pd.DataFrame(visits_data)
-                    
-                    # Display summary metrics
-                    st.subheader("📈 Summary Metrics")
-                    metrics_col1, metrics_col2, metrics_col3, metrics_col4 = st.columns(4)
-                    
-                    with metrics_col1:
-                        st.metric("Total Visits", len(df))
-                    with metrics_col2:
-                        avg_duration = df['Duration (hours)'].mean()
-                        st.metric("Avg Duration", f"{avg_duration:.1f} hrs" if pd.notnull(avg_duration) else "N/A")
-                    with metrics_col3:
-                        # Convert rating to numeric, ignoring non-numeric values
-                        df['Feedback Rating'] = pd.to_numeric(df['Feedback Rating'], errors='coerce')
-                        avg_rating = df['Feedback Rating'].mean()
-                        st.metric("Avg Rating", f"{avg_rating:.1f}/5" if pd.notnull(avg_rating) else "N/A")
-                    with metrics_col4:
-                        active_visits = df['Check-out Time'].eq('Not checked out').sum()
-                        st.metric("Active Visits", active_visits)
-                    
-                    # Display visit data
-                    st.subheader("📋 Visit Records")
-                    st.dataframe(
-                        df,
-                        column_config={
-                            "Duration (hours)": st.column_config.NumberColumn(
-                                "Duration (hours)",
-                                help="Visit duration in hours",
-                                format="%.2f"
-                            ),
-                            "Feedback Rating": st.column_config.NumberColumn(
-                                "Rating",
-                                help="Feedback rating out of 5",
-                                format="%.1f"
-                            )
+                            'Duration (hrs)': round(visit['duration'], 2) if visit.get('duration') else None,
+                            'Facilities Used': ', '.join([f['facility_name'] for f in facility_usage_response.data]) if facility_usage_response.data else '',
+                            'Facility Types': ', '.join(set([f['facility_type'] for f in facility_usage_response.data])) if facility_usage_response.data else '',
+                            'Rating': feedback_response.data[0]['rating'] if feedback_response.data else None,
+                            'Comments': feedback_response.data[0]['comments'] if feedback_response.data else ''
                         }
-                    )
-                    
-                    # Download button
-                    csv = df.to_csv(index=False).encode('utf-8')
-                    st.download_button(
-                        label="📥 Download Visit Data",
-                        data=csv,
-                        file_name=f'visits_{start_date}_{end_date}.csv',
-                        mime='text/csv',
-                    )
-                    
-                    # Visualizations
-                    st.subheader("📊 Visualizations")
-                    
-                    # Visits over time
-                    daily_visits = df['Date'].value_counts().sort_index()
-                    fig_visits = px.line(
-                        x=daily_visits.index, 
-                        y=daily_visits.values,
-                        title='Daily Visits',
-                        labels={'x': 'Date', 'y': 'Number of Visits'}
-                    )
-                    st.plotly_chart(fig_visits)
-                    
-                    # Facility usage
-                    if not df['Facilities Used'].empty and df['Facilities Used'].str.len().sum() > 0:
-                        all_facilities = [facility.strip() for facilities in df['Facilities Used'].dropna() for facility in facilities.split(',') if facility.strip()]
-                        if all_facilities:
-                            facility_counts = pd.Series(all_facilities).value_counts()
-                            fig_facilities = px.bar(
-                                x=facility_counts.index,
-                                y=facility_counts.values,
-                                title='Facility Usage',
-                                labels={'x': 'Facility', 'y': 'Times Used'}
-                            )
-                            st.plotly_chart(fig_facilities)
-                else:
-                    st.info("No valid visit data to display")
-            else:
-                st.info("No visit data found for the selected date range")
+                        visits_with_users.append(record)
+                    except Exception as e:
+                        st.error(f"Error processing visit {visit['id']}: {str(e)}")
+                        continue
+            
+            if visits_with_users:
+                # Display summary metrics
+                total_visits = len(visits_with_users)
+                active_visits = sum(1 for v in visits_with_users if v['Check-out Time'] == 'Not checked out')
+                completed_visits = [v for v in visits_with_users if v['Duration (hrs)'] is not None]
+                avg_duration = sum(v['Duration (hrs)'] for v in completed_visits) / len(completed_visits) if completed_visits else 0
+                ratings = [v['Rating'] for v in visits_with_users if v['Rating'] is not None]
+                avg_rating = sum(ratings) / len(ratings) if ratings else None
                 
-        except Exception as e:
-            st.error(f"Error loading dashboard data: {str(e)}")
+                st.markdown("### 📊 Summary Metrics")
+                metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
+                
+                with metric_col1:
+                    st.metric("Total Visits", total_visits)
+                with metric_col2:
+                    st.metric("Avg Duration", f"{avg_duration:.1f} hrs" if avg_duration else "N/A")
+                with metric_col3:
+                    st.metric("Avg Rating", f"{avg_rating:.1f}" if avg_rating else "N/A")
+                with metric_col4:
+                    st.metric("Active Visits", active_visits)
+                
+                # Display visit records
+                st.markdown("### 📋 Visit Records")
+                df = pd.DataFrame(visits_with_users)
+                st.dataframe(
+                    df,
+                    column_config={
+                        "Duration (hrs)": st.column_config.NumberColumn(
+                            "Duration (hrs)",
+                            help="Visit duration in hours",
+                            format="%.2f"
+                        ),
+                        "Rating": st.column_config.NumberColumn(
+                            "Rating",
+                            help="Feedback rating (1-5)",
+                            format="%d"
+                        )
+                    },
+                    hide_index=True
+                )
+                
+                # Download button for CSV
+                if st.download_button(
+                    "📥 Download Visit Data",
+                    df.to_csv(index=False).encode('utf-8'),
+                    "vivita_visits_data.csv",
+                    "text/csv",
+                    help="Download the visit data as a CSV file"
+                ):
+                    st.success("Data downloaded successfully!")
+            else:
+                st.info("No visit records to display")
+        else:
+            st.info("No visits found for the selected date range")
+            
+    except Exception as e:
+        st.error(f"Error loading dashboard data: {str(e)}")
 
 def record_check_in(user_id):
     try:
         # Record check-in with Philippine time
         check_in_time = get_ph_time()
+        
+        # First check if user is already checked in
+        existing_visit = supabase.table("visits").select("*").eq("user_id", user_id).is_("check_out_time", None).execute()
+        if existing_visit.data:
+            st.error("User is already checked in!")
+            return False
         
         # Insert visit record
         supabase.table("visits").insert({

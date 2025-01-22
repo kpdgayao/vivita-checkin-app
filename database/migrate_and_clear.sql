@@ -1,7 +1,18 @@
--- Enable UUID extension
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+-- First, delete all data from tables in the correct order
+DELETE FROM feedback;
+DELETE FROM facility_usage;
+DELETE FROM visits;
+DELETE FROM users;
+DELETE FROM facilities;
 
--- Users table
+-- Drop the old tables completely since we're starting fresh
+DROP TABLE IF EXISTS feedback CASCADE;
+DROP TABLE IF EXISTS facility_usage CASCADE;
+DROP TABLE IF EXISTS visits CASCADE;
+DROP TABLE IF EXISTS users CASCADE;
+DROP TABLE IF EXISTS facilities CASCADE;
+
+-- Recreate tables with new schema
 CREATE TABLE IF NOT EXISTS users (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     first_name TEXT NOT NULL,
@@ -14,7 +25,6 @@ CREATE TABLE IF NOT EXISTS users (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- Visits table
 CREATE TABLE IF NOT EXISTS visits (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID REFERENCES users(id) ON DELETE CASCADE,
@@ -25,7 +35,6 @@ CREATE TABLE IF NOT EXISTS visits (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- Facilities table
 CREATE TABLE IF NOT EXISTS facilities (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     name TEXT NOT NULL,
@@ -37,7 +46,6 @@ CREATE TABLE IF NOT EXISTS facilities (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- Facility usage table
 CREATE TABLE IF NOT EXISTS facility_usage (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     visit_id UUID REFERENCES visits(id) ON DELETE CASCADE,
@@ -48,7 +56,6 @@ CREATE TABLE IF NOT EXISTS facility_usage (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- Feedback table
 CREATE TABLE IF NOT EXISTS feedback (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     visit_id UUID REFERENCES visits(id) ON DELETE CASCADE,
@@ -57,6 +64,14 @@ CREATE TABLE IF NOT EXISTS feedback (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Create indexes for faster searches
+CREATE INDEX idx_users_first_name ON users(first_name);
+CREATE INDEX idx_users_last_name ON users(last_name);
+CREATE INDEX idx_visits_user_id ON visits(user_id);
+CREATE INDEX idx_visits_check_in_time ON visits(check_in_time);
+CREATE INDEX idx_facility_usage_visit_id ON facility_usage(visit_id);
+CREATE INDEX idx_feedback_visit_id ON feedback(visit_id);
 
 -- Create updated_at triggers
 CREATE OR REPLACE FUNCTION update_updated_at_column()
@@ -93,16 +108,17 @@ CREATE TRIGGER update_feedback_updated_at
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
 
--- Insert default facilities
-INSERT INTO facilities (name, category, type, description) VALUES
-    ('Button Pin Maker', 'Arts & Crafts', 'consumable', 'Create custom button pins'),
-    ('Art Supplies', 'Arts & Crafts', 'consumable', 'General art supplies'),
-    ('Jewelry Making Tools', 'Arts & Crafts', 'consumable', 'Tools for jewelry making'),
-    ('Jewelry Making Materials', 'Arts & Crafts', 'consumable', 'Materials for jewelry making'),
-    ('Tablets', 'Tech-Art', 'lease', 'Digital tablets for art creation'),
-    ('3D Printer', 'Tech-Art', 'lease', '3D printing equipment'),
-    ('Cricut', 'Tech-Art', 'lease', 'Cricut cutting machine'),
-    ('Polymer Clay', 'Tech-Art', 'lease', 'Clay for modeling'),
-    ('Heat Press', 'Tech-Art', 'lease', 'Heat press for transfers'),
-    ('Heat Shrink Materials', 'Tech-Art', 'lease', 'Heat shrink crafting materials')
-ON CONFLICT DO NOTHING;
+-- Re-insert default facilities
+INSERT INTO facilities (name, category, type, description, status) VALUES
+    ('Button Pin Maker', 'Arts & Crafts', 'consumable', 'Create custom button pins', 'available'),
+    ('Art Supplies', 'Arts & Crafts', 'consumable', 'General art supplies', 'available'),
+    ('Jewelry Making Tools', 'Arts & Crafts', 'consumable', 'Tools for jewelry making', 'available'),
+    ('Jewelry Making Materials', 'Arts & Crafts', 'consumable', 'Materials for jewelry making', 'available'),
+    ('Tablets', 'Tech-Art', 'lease', 'Digital tablets for art creation', 'available'),
+    ('3D Printer', 'Tech-Art', 'lease', '3D printing equipment', 'available'),
+    ('Cricut', 'Tech-Art', 'lease', 'Cricut cutting machine', 'available'),
+    ('Polymer Clay', 'Tech-Art', 'lease', 'Clay for modeling', 'available'),
+    ('Heat Press', 'Tech-Art', 'lease', 'Heat press for transfers', 'available'),
+    ('Heat Shrink Materials', 'Tech-Art', 'lease', 'Heat shrink crafting materials', 'available'),
+    ('Desktop Computer', 'Tech-Art', 'lease', 'Computer for digital work', 'available'),
+    ('Robotics Kit', 'Tech-Art', 'lease', 'Kit for robotics projects', 'available');
