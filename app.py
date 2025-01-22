@@ -69,6 +69,8 @@ if 'feedback_success' not in st.session_state:
     st.session_state.feedback_success = False
 if 'feedback_user_name' not in st.session_state:
     st.session_state.feedback_user_name = ""
+if 'show_new_user_form' not in st.session_state:
+    st.session_state.show_new_user_form = False
 
 def load_active_visits():
     """Load currently active visits"""
@@ -189,24 +191,78 @@ def check_in_out_page():
         
         # Search form
         with st.form("search_form", clear_on_submit=False):
-            search_query = st.text_input("🔍 Search by name")
-            search_submitted = st.form_submit_button("Search")
+            search_query = st.text_input("🔍 Search by name", key="search_input")
+            search_col1, search_col2 = st.columns([3, 1])
+            with search_col1:
+                search_submitted = st.form_submit_button("Search", use_container_width=True)
+            with search_col2:
+                new_user_button = st.form_submit_button("New User", use_container_width=True)
         
         # Clear search results if search query is empty
         if not search_query:
             if 'search_results' in st.session_state:
                 del st.session_state.search_results
         
-        # Only show search results if there's a query and form was submitted
-        if search_submitted and search_query:
+        # Handle form submission
+        if new_user_button:
+            st.session_state.show_new_user_form = True
+            st.session_state.search_results = []
+        elif search_submitted and search_query:
             try:
+                # Case-insensitive search using ilike
+                search_terms = search_query.strip().split()
+                query_conditions = []
+                
+                for term in search_terms:
+                    query_conditions.append(
+                        f"first_name.ilike.%{term}%,"
+                        f"last_name.ilike.%{term}%"
+                    )
+                
                 response = supabase.table("users").select("*").or_(
-                    f"first_name.ilike.%{search_query}%,last_name.ilike.%{search_query}%"
+                    ','.join(query_conditions)
                 ).execute()
+                
                 st.session_state.search_results = response.data
             except Exception as e:
                 st.error(f"Error searching users: {str(e)}")
                 st.session_state.search_results = []
+        
+        # New user form
+        if st.session_state.get('show_new_user_form', False):
+            with st.form("new_user_form"):
+                st.subheader("Create New User")
+                
+                first_name = st.text_input("First Name*")
+                last_name = st.text_input("Last Name*")
+                birthdate = st.date_input("Birthdate*", min_value=date(1900, 1, 1), max_value=date.today())
+                school_organization = st.text_input("School/Organization*")
+                emergency_contact = st.text_input("Emergency Contact*")
+                
+                submit_button = st.form_submit_button("Create User")
+                
+                if submit_button:
+                    if not all([first_name, last_name, birthdate, school_organization, emergency_contact]):
+                        st.error("Please fill in all required fields")
+                    else:
+                        try:
+                            response = supabase.table("users").insert({
+                                "first_name": first_name,
+                                "last_name": last_name,
+                                "birthdate": birthdate.isoformat(),
+                                "school_organization": school_organization,
+                                "emergency_contact": emergency_contact
+                            }).execute()
+                            
+                            if response.data:
+                                st.success("User created successfully!")
+                                # Clear the form
+                                st.session_state.show_new_user_form = False
+                                # Show the new user in search results
+                                st.session_state.search_results = response.data
+                                st.experimental_rerun()
+                        except Exception as e:
+                            st.error(f"Error creating user: {str(e)}")
         
         # Display search results from session state
         if hasattr(st.session_state, 'search_results') and st.session_state.search_results:
@@ -440,17 +496,26 @@ def admin_dashboard_page():
         end_datetime = datetime.combine(end_date, datetime.max.time()).replace(tzinfo=PH_TIMEZONE)
         
         # Get visits within date range
-        visits_response = supabase.table("visits").select("*").gte("check_in_time", start_datetime.isoformat()).lte("check_in_time", end_datetime.isoformat()).order("check_in_time", desc=True).execute()
+        visits_response = supabase.rpc(
+            'get_visit_records',
+            {
+                'start_date': start_datetime.isoformat(),
+                'end_date': end_datetime.isoformat()
+            }
+        ).execute()
         
         if visits_response.data:
-            # Get user details for these visits
+            # Process visit records
             visits_with_users = []
             for visit in visits_response.data:
-                # Get user data
-                user_response = supabase.table("users").select("*").eq("id", visit["user_id"]).execute()
-                
-                if user_response.data:
-                    user = user_response.data[0]
+                try:
+                    # Convert times to PH timezone
+                    check_in_time = datetime.fromisoformat(visit['check_in_time']).astimezone(PH_TIMEZONE)
+                    check_out_time = datetime.fromisoformat(visit['check_out_time']).astimezone(PH_TIMEZONE) if visit.get('check_out_time') else None
+                    
+                    # Calculate age
+                    birthdate = datetime.strptime(visit['birthdate'], '%Y-%m-%d').date()
+                    age = calculate_age(birthdate)
                     
                     # Get feedback
                     feedback_response = supabase.table("feedback").select("*").eq("visit_id", visit["id"]).execute()
@@ -458,33 +523,24 @@ def admin_dashboard_page():
                     # Get facility usage
                     facility_usage_response = supabase.table("facility_usage").select("*").eq("visit_id", visit["id"]).execute()
                     
-                    try:
-                        # Convert times to PH timezone
-                        check_in_time = datetime.fromisoformat(visit['check_in_time']).astimezone(PH_TIMEZONE)
-                        check_out_time = datetime.fromisoformat(visit['check_out_time']).astimezone(PH_TIMEZONE) if visit.get('check_out_time') else None
-                        
-                        # Calculate age
-                        birthdate = datetime.strptime(user['birthdate'], '%Y-%m-%d').date()
-                        age = calculate_age(birthdate)
-                        
-                        record = {
-                            'Date': check_in_time.strftime('%Y-%m-%d'),
-                            'Name': f"{user['first_name']} {user['last_name']}",
-                            'Age': age,
-                            'School/Organization': user['school_organization'],
-                            'Emergency Contact': user['emergency_contact'],
-                            'Check-in Time': check_in_time.strftime('%I:%M %p'),
-                            'Check-out Time': check_out_time.strftime('%I:%M %p') if check_out_time else 'Not checked out',
-                            'Duration (hrs)': round(visit['duration'], 2) if visit.get('duration') else None,
-                            'Facilities Used': ', '.join([f['facility_name'] for f in facility_usage_response.data]) if facility_usage_response.data else '',
-                            'Facility Types': ', '.join(set([f['facility_type'] for f in facility_usage_response.data])) if facility_usage_response.data else '',
-                            'Rating': feedback_response.data[0]['rating'] if feedback_response.data else None,
-                            'Comments': feedback_response.data[0]['comments'] if feedback_response.data else ''
-                        }
-                        visits_with_users.append(record)
-                    except Exception as e:
-                        st.error(f"Error processing visit {visit['id']}: {str(e)}")
-                        continue
+                    record = {
+                        'Date': check_in_time.strftime('%Y-%m-%d'),
+                        'Name': f"{visit['first_name']} {visit['last_name']}",
+                        'Age': age,
+                        'School/Organization': visit['school_organization'],
+                        'Emergency Contact': visit['emergency_contact'],
+                        'Check-in Time': check_in_time.strftime('%I:%M %p'),
+                        'Check-out Time': check_out_time.strftime('%I:%M %p') if check_out_time else 'Not checked out',
+                        'Duration (hrs)': round(visit['duration'], 2) if visit.get('duration') else None,
+                        'Facilities Used': ', '.join([f['facility_name'] for f in facility_usage_response.data]) if facility_usage_response.data else '',
+                        'Facility Types': ', '.join(set([f['facility_type'] for f in facility_usage_response.data])) if facility_usage_response.data else '',
+                        'Rating': feedback_response.data[0]['rating'] if feedback_response.data else None,
+                        'Comments': feedback_response.data[0]['comments'] if feedback_response.data else ''
+                    }
+                    visits_with_users.append(record)
+                except Exception as e:
+                    st.error(f"Error processing visit {visit['id']}: {str(e)}")
+                    continue
             
             if visits_with_users:
                 # Display summary metrics
@@ -589,8 +645,12 @@ def record_check_out(visit_id):
         return False
 
 def calculate_age(birthdate):
+    """Calculate age from birthdate, considering month and day"""
     today = date.today()
-    age = today.year - birthdate.year - ((today.month, today.day) < (birthdate.month, birthdate.day))
+    age = today.year - birthdate.year
+    # Subtract a year if birthday hasn't occurred this year
+    if today.month < birthdate.month or (today.month == birthdate.month and today.day < birthdate.day):
+        age -= 1
     return age
 
 def main():
