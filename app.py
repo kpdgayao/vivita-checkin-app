@@ -102,7 +102,7 @@ def check_in_out_page():
     # Show feedback form if needed
     if st.session_state.show_feedback and st.session_state.checkout_visit_id:
         with st.form("feedback_form"):
-            st.subheader("How was your experience today?")
+            st.subheader("How was your stay in Vivita?")
             
             # Emoticon-based rating using radio buttons
             rating = st.radio(
