@@ -109,11 +109,11 @@ def check_in_out_page():
                 "Select your rating:",
                 options=[1, 2, 3, 4, 5],
                 format_func=lambda x: {
-                    1: "😢 Very Unsatisfied",
-                    2: "🙁 Unsatisfied",
-                    3: "😐 Neutral",
-                    4: "🙂 Satisfied",
-                    5: "😊 Very Satisfied"
+                    1: "😢 Very Bad",
+                    2: "🙁 Not Nice",
+                    3: "😐 Meh",
+                    4: "🙂 Good",
+                    5: "😊 Super Fun!"
                 }[x],
                 horizontal=True,
                 index=4  # Default to highest rating
