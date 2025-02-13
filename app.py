@@ -658,7 +658,7 @@ def main():
     with st.sidebar:
         st.title("🏢 Vivita Makerspace")
         st.image("https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRMnphwMpP9pFqKNENko8lahwFk5Uif84vELA&s", 
-                use_column_width=True,
+                use_container_width=True,
                 caption="Vivita Makerspace")
         
         selected = st.radio(

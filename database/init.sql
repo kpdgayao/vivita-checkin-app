@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS visits (
 CREATE TABLE IF NOT EXISTS facilities (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     name TEXT NOT NULL,
-    category TEXT NOT NULL CHECK (category IN ('Arts & Crafts', 'Tech-Art')),
+    category TEXT NOT NULL CHECK (category IN ('Arts & Crafts', 'Tech-Art', 'Activities')),
     type TEXT NOT NULL CHECK (type IN ('consumable', 'lease')),
     description TEXT,
     status TEXT DEFAULT 'available' CHECK (status IN ('available', 'in_use', 'maintenance', 'unavailable')),
@@ -104,5 +104,6 @@ INSERT INTO facilities (name, category, type, description) VALUES
     ('Cricut', 'Tech-Art', 'lease', 'Cricut cutting machine'),
     ('Polymer Clay', 'Tech-Art', 'lease', 'Clay for modeling'),
     ('Heat Press', 'Tech-Art', 'lease', 'Heat press for transfers'),
-    ('Heat Shrink Materials', 'Tech-Art', 'lease', 'Heat shrink crafting materials')
+    ('Heat Shrink Materials', 'Tech-Art', 'lease', 'Heat shrink crafting materials'),
+    ('Plushies', 'Activities', 'consumable', 'Soft toys for playful engagement')
 ON CONFLICT DO NOTHING;
