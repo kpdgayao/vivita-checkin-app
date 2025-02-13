@@ -260,7 +260,7 @@ def check_in_out_page():
                                 st.session_state.show_new_user_form = False
                                 # Show the new user in search results
                                 st.session_state.search_results = response.data
-                                st.experimental_rerun()
+                                st.rerun()
                         except Exception as e:
                             st.error(f"Error creating user: {str(e)}")
         
