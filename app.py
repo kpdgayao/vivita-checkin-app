@@ -121,7 +121,7 @@ def check_in_out_page():
             
             facilities_used = st.multiselect(
                 "Facilities used",
-                ["3D Printer", "Laser Cutter", "Robotics", "Tablet", "Desktop Computer", "Cricut", "Polymer Clay", "Heat Press", "Heat Shrink", "Button Pin", "Art Supplies", "Jewelry Making"]
+                ["3D Printer", "Laser Cutter", "Robotics", "Tablet", "Desktop Computer", "Cricut", "Polymer Clay", "Heat Press", "Heat Shrink", "Button Pin", "Art Supplies", "Jewelry Making","Plushies"]
             )
             
             comments = st.text_area("Additional comments (optional)")
